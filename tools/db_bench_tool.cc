@@ -4834,7 +4834,7 @@ class Benchmark {
         double use_time = (now_time - last_time)*1e-6;
         double now = (now_time - start_time)*1e-6;
 
-        LZW_LOG(1,"now=,%.2f,s speed=,%.2f,MB/s,%.1f,iops size=,%.1f,MB average=,%.2f,MB/s,%.1f,iops ,\n",
+        LZW_LOG(1,"now=,%.2f,s speed=,%.2f,MB/s,%.1f,iops size=,%.1f,MB average=,%.2f,MB/s,%.1f,iops,\n",
                     now,(1.0*eBytes/1048576.0)/use_time/*throughput*/,1.0*per_second_done/use_time/*ops*/,1.0*now_bytes/1048576.0,
                     (1.0*now_bytes/1048576.0)/now,1.0*now_done/now);
         

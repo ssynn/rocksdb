@@ -91,4 +91,5 @@ compile_commands.json
 clang-format-diff.py
 .py3/
 
+*/test.sh
 */result

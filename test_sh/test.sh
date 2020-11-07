@@ -21,4 +21,5 @@ limit="`expr 256 \* 1024 \* 1024`"
 
 # echo 3 > /proc/sys/vm/drop_caches
 
-ls -la
+mkdir aa
+cd aa
