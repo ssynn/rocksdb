@@ -1448,7 +1448,7 @@ namespace ROCKSDB_NAMESPACE {
 }
 
 
-  void init_log_file() {
+void init_log_file() {
   FILE* fp;
   fp = fopen(log_file1.c_str(), "w");
   if (fp == nullptr) printf("log failed\n");
@@ -1473,9 +1473,9 @@ namespace ROCKSDB_NAMESPACE {
   LZW_LOG(5,"now(s),through(iops),p90,,,p99,,,p999,,,p9999,,,p99999,,,\n");
 
 
-  fp = fopen(log_file0.c_str(), "w");
-  if (fp == nullptr) printf("log failed\n");
-  fclose(fp);
+  // fp = fopen(log_file0.c_str(), "w");
+  // if (fp == nullptr) printf("log failed\n");
+  // fclose(fp);
 
 }
 
@@ -4832,10 +4832,10 @@ class Benchmark {
         uint64_t eBytes = per_second_done * (key_size_+FLAGS_value_size);
         uint64_t now_bytes = now_done * (key_size_+FLAGS_value_size);
         double use_time = (now_time - last_time)*1e-6;
-        double now = (now_time - last_ops)*1e-6;
+        double now = (now_time - start_time)*1e-6;
 
         LZW_LOG(1,"now=,%.2f,s speed=,%.2f,MB/s,%.1f,iops size=,%.1f,MB average=,%.2f,MB/s,%.1f,iops ,\n",
-                    now,(1.0*eBytes/1048576.0)/use_time,1.0*per_second_done/use_time,1.0*now_bytes/1048576.0,
+                    now,(1.0*eBytes/1048576.0)/use_time/*throughput*/,1.0*per_second_done/use_time/*ops*/,1.0*now_bytes/1048576.0,
                     (1.0*now_bytes/1048576.0)/now,1.0*now_done/now);
         
         uint64_t *ops_latency = thread->shared->latencys;
@@ -7635,6 +7635,7 @@ class Benchmark {
 
 // ZYN 测试入口
 int db_bench_tool(int argc, char** argv) {
+  init_log_file();
   ROCKSDB_NAMESPACE::port::InstallStackTraceHandler();
   static bool initialized = false;
   if (!initialized) {

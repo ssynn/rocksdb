@@ -15,8 +15,8 @@ report_ops_latency="true"
 report_fillrandom_latency="true"
 
 YCSB_uniform_distribution="true"
-ycsb_workloada_num="10000"
-num="20000"
+ycsb_workloada_num="100000"
+num="200000"
 threads="2"
 
 const_params=""
