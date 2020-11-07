@@ -1080,6 +1080,7 @@ Status DBImpl::CompactFilesImpl(
   // following functions call is pluggable to external developers.
   version->GetColumnFamilyMetaData(&cf_meta);
 
+  //这里应该挑出对应cf的文件
   if (output_path_id < 0) {
     if (cfd->ioptions()->cf_paths.size() == 1U) {
       output_path_id = 0;
@@ -1090,6 +1091,7 @@ Status DBImpl::CompactFilesImpl(
     }
   }
 
+  // 里应该挑出对应cf的文件
   Status s = cfd->compaction_picker()->SanitizeCompactionInputFiles(
       &input_set, cf_meta, output_level);
   if (!s.ok()) {
@@ -1103,6 +1105,7 @@ Status DBImpl::CompactFilesImpl(
     return s;
   }
 
+  // 输入的文件正在被compact，return
   for (const auto& inputs : input_files) {
     if (cfd->compaction_picker()->AreFilesInCompaction(inputs.files)) {
       return Status::Aborted(
@@ -1121,11 +1124,13 @@ Status DBImpl::CompactFilesImpl(
     return Status::CompactionTooLarge();
   }
 
+  // 终于要进行真的copmcation了
   // At this point, CompactFiles will be run.
   bg_compaction_scheduled_++;
 
   std::unique_ptr<Compaction> c;
   assert(cfd->compaction_picker());
+  // 这里会建立新的compaction对象
   c.reset(cfd->compaction_picker()->CompactFiles(
       compact_options, input_files, output_level, version->storage_info(),
       *cfd->GetLatestMutableCFOptions(), mutable_db_options_, output_path_id));
@@ -1174,6 +1179,7 @@ Status DBImpl::CompactFilesImpl(
   mutex_.Unlock();
   TEST_SYNC_POINT("CompactFilesImpl:0");
   TEST_SYNC_POINT("CompactFilesImpl:1");
+  // 运行compaction任务
   compaction_job.Run();
   TEST_SYNC_POINT("CompactFilesImpl:2");
   TEST_SYNC_POINT("CompactFilesImpl:3");
@@ -2091,6 +2097,7 @@ void DBImpl::EnableManualCompaction() {
   manual_compaction_paused_.fetch_sub(1, std::memory_order_release);
 }
 
+// 这里触发flush
 void DBImpl::MaybeScheduleFlushOrCompaction() {
   mutex_.AssertHeld();
   if (!opened_successfully_) {

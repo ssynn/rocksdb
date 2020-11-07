@@ -889,6 +889,7 @@ Status CompactionJob::Install(const MutableCFOptions& mutable_cf_options) {
   return status;
 }
 
+// 这里应该在做真正的compaction，把SubcompactionState内的key遍历，给用于构建SST
 void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
   assert(sub_compact);
   assert(sub_compact->compaction);

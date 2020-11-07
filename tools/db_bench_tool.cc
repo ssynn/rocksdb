@@ -10,6 +10,7 @@
 #ifdef GFLAGS
 #ifdef NUMA
 #include <numa.h>
+#include <numaif.h>
 #endif
 #ifndef OS_WIN
 #include <unistd.h>
@@ -25,6 +26,7 @@
 #include <memory>
 #include <mutex>
 #include <thread>
+#include <iostream>
 #include <unordered_map>
 
 #include "db/db_impl/db_impl.h"
@@ -72,6 +74,11 @@
 #include "utilities/merge_operators/sortlist.h"
 #include "utilities/persistent_cache/block_cache_tier.h"
 
+#include <algorithm>
+#include <queue>
+#include <sys/syscall.h>
+
+
 #ifdef MEMKIND
 #include "memory/memkind_kmem_allocator.h"
 #endif
@@ -79,6 +86,9 @@
 #ifdef OS_WIN
 #include <io.h>  // open/close
 #endif
+
+
+// #define LZW_LOG(file_num,format,...)   LZW_LOG(file_num,format,##__VA_ARGS__)
 
 using GFLAGS_NAMESPACE::ParseCommandLineFlags;
 using GFLAGS_NAMESPACE::RegisterFlagValidator;
@@ -126,7 +136,9 @@ DEFINE_string(
     "randomtransaction,"
     "randomreplacekeys,"
     "timeseries,"
-    "getmergeoperands",
+    "getmergeoperands"
+    "ycsbwklda"
+    ,
 
     "Comma-separated list of operations to run in the specified"
     " order. Available benchmarks:\n"
@@ -203,6 +215,22 @@ DEFINE_string(
     "by doing a Get followed by binary searching in the large sorted list vs "
     "doing a GetMergeOperands and binary searching in the operands which are"
     "sorted sub-lists. The MergeOperator used is sortlist.h\n");
+
+
+DEFINE_bool(report_write_latency, false,"");
+
+
+/////
+DEFINE_uint64(request_rate_limit, 20000, "Number of request IOPS, default 20K iops");
+DEFINE_uint64(per_queue_length, 4, "Number of per request queue length");
+/////
+/////
+DEFINE_bool(report_ops_latency, false,"");
+DEFINE_bool(report_fillrandom_latency, false,"");
+
+DEFINE_int64(ycsb_workloada_num, 1000000,"");
+
+DEFINE_bool(YCSB_uniform_distribution, false, "Uniform key distribution for YCSB");
 
 DEFINE_int64(num, 1000000, "Number of key/values to place in database");
 
@@ -1375,6 +1403,84 @@ static const bool FLAGS_table_cache_numshardbits_dummy __attribute__((__unused__
 
 namespace ROCKSDB_NAMESPACE {
 
+  const std::string log_file0("NVM_LOG");
+  const std::string log_file1("OP_TIME.csv");
+  const std::string log_file2("OP_DATA");
+  const std::string log_file3("compaction.csv");
+  const std::string log_file4("Latency.csv");
+  const std::string log_file5("PerSecondLatency.csv");
+
+  void LZW_LOG(int file_num, const char* format, ...) {
+  va_list ap;
+  va_start(ap, format);
+  char buf[8192];
+  vsprintf(buf, format, ap);
+  va_end(ap);
+
+  const std::string* log_file;
+  switch (file_num) {
+    case 0:
+      log_file = &log_file0;
+      break;
+    case 1:
+      log_file = &log_file1;
+      break;
+    case 2:
+      log_file = &log_file2;
+      break;
+    case 3:
+      log_file = &log_file3;
+      break;
+    case 4:
+      log_file = &log_file4;
+      break;
+    case 5:
+      log_file = &log_file5;
+      break;
+    default:
+      return;
+  }
+
+  FILE* fp = fopen(log_file->c_str(), "a");
+  if (fp == nullptr) printf("log failed\n");
+  fprintf(fp, "%s", buf);
+  fclose(fp);
+}
+
+
+  void init_log_file() {
+  FILE* fp;
+  fp = fopen(log_file1.c_str(), "w");
+  if (fp == nullptr) printf("log failed\n");
+  fclose(fp);
+
+  fp = fopen(log_file2.c_str(), "w");
+  if (fp == nullptr) printf("log failed\n");
+  fclose(fp);
+
+  fp = fopen(log_file3.c_str(), "w");
+  if(fp == nullptr) printf("log failed\n");
+  fclose(fp);
+  LZW_LOG(3,"compaction,read(MB),write(MB),time(s),start(s),is_level0\n");
+
+  fp = fopen(log_file4.c_str(), "w");
+  if(fp == nullptr) printf("log failed\n");
+  fclose(fp);
+
+  fp = fopen(log_file5.c_str(), "w");
+  if(fp == nullptr) printf("log failed\n");
+  fclose(fp);
+  LZW_LOG(5,"now(s),through(iops),p90,,,p99,,,p999,,,p9999,,,p99999,,,\n");
+
+
+  fp = fopen(log_file0.c_str(), "w");
+  if (fp == nullptr) printf("log failed\n");
+  fclose(fp);
+
+}
+
+
+
 namespace {
 struct ReportFileOpCounters {
   std::atomic<int> open_counter_;
@@ -2020,7 +2126,7 @@ class Stats {
         auto hist_temp = std::make_shared<HistogramImpl>();
         hist_.insert({op_type, std::move(hist_temp)});
       }
-      hist_[op_type]->Add(micros);
+      hist_[op_type]->Add(micros);// 记录对应操作的用时，用于生成直方图
 
       if (micros > 20000 && !FLAGS_stats_interval) {
         fprintf(stderr, "long op: %" PRIu64 " micros%30s\r", micros, "");
@@ -2029,7 +2135,7 @@ class Stats {
       last_op_finish_ = now;
     }
 
-    done_ += num_ops;
+    done_ += num_ops; // 每个batch的操作数量
     if (done_ >= next_report_) {
       if (!FLAGS_stats_interval) {
         if      (next_report_ < 1000)   next_report_ += 100;
@@ -2273,6 +2379,100 @@ class TimestampEmulator {
   }
 };
 
+struct Latency {
+  uint64_t stay_queue_time = 0;    //Microsecond
+  uint64_t execute_time = 0;      //Microsecond
+};
+bool CmpLatency(Latency x,Latency y) {
+  return ( x.stay_queue_time + x.execute_time ) < ( y.stay_queue_time + y.execute_time );
+}
+uint64_t AllLatency(Latency x) {
+  return ( x.stay_queue_time + x.execute_time );
+}
+
+// void ReportLatency(Latency *ops_latency, uint64_t num) {
+//     if( ops_latency == nullptr || num < 10 ) return;
+//     std::sort(ops_latency, ops_latency + num, CmpLatency);
+//     /* for(uint64_t i = 0; i < num; i++) {
+//       printf("%lu\n",ops_latency[i]);
+//     }
+//     printf("done:%lu\n",num); */
+//     uint64_t cnt = 0;
+//     printf("---------write latency---------\n");
+//     cnt = 0.1 * num;
+//     printf("latency: 10%%th(%lu) = [%lu us]\n", cnt, AllLatency(ops_latency[cnt - 1]));
+//     cnt = 0.2 * num;
+//     printf("latency: 20%%th(%lu) = [%lu us]\n", cnt, AllLatency(ops_latency[cnt - 1]));
+//     cnt = 0.3 * num;
+//     printf("latency: 30%%th(%lu) = [%lu us]\n", cnt, AllLatency(ops_latency[cnt - 1]));
+//     cnt = 0.4 * num;
+//     printf("latency: 40%%th(%lu) = [%lu us]\n", cnt, AllLatency(ops_latency[cnt - 1]));
+//     cnt = 0.5 * num;
+//     printf("latency: 50%%th(%lu) = [%lu us]\n", cnt, AllLatency(ops_latency[cnt - 1]));
+//     cnt = 0.6 * num;
+//     printf("latency: 60%%th(%lu) = [%lu us]\n", cnt, AllLatency(ops_latency[cnt - 1]));
+//     cnt = 0.7 * num;
+//     printf("latency: 70%%th(%lu) = [%lu us]\n", cnt, AllLatency(ops_latency[cnt - 1]));
+//     cnt = 0.8 * num;
+//     printf("latency: 80%%th(%lu) = [%lu us]\n", cnt, AllLatency(ops_latency[cnt - 1]));
+//     cnt = 0.9 * num;
+//     printf("latency: 90%%th(%lu) = [%lu us]\n", cnt, AllLatency(ops_latency[cnt - 1]));
+//     cnt = 0.99 * num;
+//     printf("latency: 99%%th(%lu) = [%lu us]\n", cnt, AllLatency(ops_latency[cnt - 1]));
+//     cnt = 0.999 * num;
+//     printf("latency: 99.9%%th(%lu) = [%lu us]\n", cnt, AllLatency(ops_latency[cnt - 1]));
+//     cnt = 0.9999 * num;
+//     printf("latency: 99.99%%th(%lu) = [%lu us]\n", cnt, AllLatency(ops_latency[cnt - 1]));
+//     cnt = 0.99999 * num;
+//     printf("latency: 99.999%%th(%lu) = [%lu us]\n", cnt, AllLatency(ops_latency[cnt - 1]));
+//     printf("-------------------------------\n");
+
+//     for(uint64_t i = 0; i < num; i++) {
+//       LZW_LOG(4,"%lu,%lu,%lu\n",AllLatency(ops_latency[i]),ops_latency[i].stay_queue_time,ops_latency[i].execute_time);
+//     }
+// }
+// void ReportLatency2(uint64_t *ops_latency, uint64_t num) {
+//     if( ops_latency == nullptr || num < 10 ) return;
+//     std::sort(ops_latency, ops_latency + num);
+//     /* for(uint64_t i = 0; i < num; i++) {
+//       printf("%lu\n",ops_latency[i]);
+//     }
+//     printf("done:%lu\n",num); */
+//     uint64_t cnt = 0;
+//     printf("---------write latency---------\n");
+//     cnt = 0.1 * num;
+//     printf("latency: 10%%th(%lu) = [%lu us]\n", cnt, ops_latency[cnt - 1]);
+//     cnt = 0.2 * num;
+//     printf("latency: 20%%th(%lu) = [%lu us]\n", cnt, ops_latency[cnt - 1]);
+//     cnt = 0.3 * num;
+//     printf("latency: 30%%th(%lu) = [%lu us]\n", cnt, ops_latency[cnt - 1]);
+//     cnt = 0.4 * num;
+//     printf("latency: 40%%th(%lu) = [%lu us]\n", cnt, ops_latency[cnt - 1]);
+//     cnt = 0.5 * num;
+//     printf("latency: 50%%th(%lu) = [%lu us]\n", cnt, ops_latency[cnt - 1]);
+//     cnt = 0.6 * num;
+//     printf("latency: 60%%th(%lu) = [%lu us]\n", cnt, ops_latency[cnt - 1]);
+//     cnt = 0.7 * num;
+//     printf("latency: 70%%th(%lu) = [%lu us]\n", cnt, ops_latency[cnt - 1]);
+//     cnt = 0.8 * num;
+//     printf("latency: 80%%th(%lu) = [%lu us]\n", cnt, ops_latency[cnt - 1]);
+//     cnt = 0.9 * num;
+//     printf("latency: 90%%th(%lu) = [%lu us]\n", cnt, ops_latency[cnt - 1]);
+//     cnt = 0.99 * num;
+//     printf("latency: 99%%th(%lu) = [%lu us]\n", cnt, ops_latency[cnt - 1]);
+//     cnt = 0.999 * num;
+//     printf("latency: 99.9%%th(%lu) = [%lu us]\n", cnt, ops_latency[cnt - 1]);
+//     cnt = 0.9999 * num;
+//     printf("latency: 99.99%%th(%lu) = [%lu us]\n", cnt, ops_latency[cnt - 1]);
+//     cnt = 0.99999 * num;
+//     printf("latency: 99.999%%th(%lu) = [%lu us]\n", cnt, ops_latency[cnt - 1]);
+//     printf("-------------------------------\n");
+
+//     for(uint64_t i = 0; i < num; i++) {
+//       LZW_LOG(4,"%lu\n",ops_latency[i]);
+//     }
+// }
+
 // State shared by all concurrent executions of the same benchmark.
 struct SharedState {
   port::Mutex mu;
@@ -2291,6 +2491,15 @@ struct SharedState {
   long num_initialized;
   long num_done;
   bool start;
+
+  port::Mutex latency_mu; //mutex of ops_latency, ops_done
+  Latency *ops_latency = nullptr;
+  uint64_t ops_done = 0;
+
+  port::Mutex latencys_mutex; //for report_ops_latency && ( fillrandom )
+  uint64_t *latencys = nullptr;
+  uint64_t ops_num = 0;
+  uint64_t ops_bytes = 0;
 
   SharedState() : cv(&mu), perf_level(FLAGS_perf_level) { }
 };
@@ -2918,10 +3127,14 @@ class Benchmark {
     }
     Open(&open_options_);
     PrintHeader();
+    // 读取 --benchmarks的参数
     std::stringstream benchmark_stream(FLAGS_benchmarks);
     std::string name;
     std::unique_ptr<ExpiredTimeFilter> filter;
+    // printf("FLAGS_num:%lld", FLAGS_num);
+    // 分别执行benchmarks内的参数，参数名在name
     while (std::getline(benchmark_stream, name, ',')) {
+      std::cout<<name<<std::endl;
       // Sanitize parameters
       num_ = FLAGS_num;
       reads_ = (FLAGS_reads < 0 ? FLAGS_num : FLAGS_reads);
@@ -3019,6 +3232,9 @@ class Benchmark {
           num_threads = 1;
         }
         method = &Benchmark::WriteUniqueRandom;
+      } else if (name == "ycsbwklda"){
+        fresh_db = true;
+        method = &Benchmark::YCSBWorkloadA;
       } else if (name == "overwrite") {
         method = &Benchmark::WriteRandom;
       } else if (name == "fillsync") {
@@ -3386,6 +3602,7 @@ class Benchmark {
     }
   }
 
+  // 传入线程数，参数名，调用方法
   Stats RunBenchmark(int n, Slice name,
                      void (Benchmark::*method)(ThreadState*)) {
     SharedState shared;
@@ -3407,6 +3624,14 @@ class Benchmark {
     if (FLAGS_report_interval_seconds > 0) {
       reporter_agent.reset(new ReporterAgent(FLAGS_env, FLAGS_report_file,
                                              FLAGS_report_interval_seconds));
+    }
+
+    if(FLAGS_report_ops_latency && (method == &Benchmark::YCSBWorkloadA)) 
+    {
+      // 每个线程都要写入ycsb_workloada_num的数据
+      shared.latencys = new uint64_t[FLAGS_ycsb_workloada_num * n];
+      n++; // 额外开一个线程用于统计操作latency和每秒吞吐量
+      shared.total = n;
     }
 
     ThreadArg* arg = new ThreadArg[n];
@@ -3456,6 +3681,11 @@ class Benchmark {
       merge_stats.Merge(arg[i].thread->stats);
     }
     merge_stats.Report(name);
+
+    if ( FLAGS_report_ops_latency && (method == &Benchmark::YCSBWorkloadA)) {
+      delete[] shared.latencys;
+      shared.latencys = nullptr;
+    }
 
     for (int i = 0; i < n; i++) {
       delete arg[i].thread;
@@ -4199,7 +4429,7 @@ class Benchmark {
           db->db = ptr;
         }
       } else {
-        s = DB::Open(options, db_name, column_families, &db->cfh, &db->db);
+        s = DB::Open(options, db_name, column_families, &db->cfh, &db->db); // 这里开启普通的DB
       }
 #else
       s = DB::Open(options, db_name, column_families, &db->cfh, &db->db);
@@ -4377,7 +4607,7 @@ class Benchmark {
     if (db_.db == nullptr) {
       num_key_gens = multi_dbs_.size();
     }
-    std::vector<std::unique_ptr<KeyGenerator>> key_gens(num_key_gens);
+    std::vector<std::unique_ptr<KeyGenerator>> key_gens(num_key_gens); // size = 1
     int64_t max_ops = num_ops * num_key_gens;
     int64_t ops_per_stage = max_ops;
     if (FLAGS_num_column_families > 1 && FLAGS_num_hot_column_families > 0) {
@@ -4386,7 +4616,7 @@ class Benchmark {
                       1;
     }
 
-    Duration duration(test_duration, max_ops, ops_per_stage);
+    Duration duration(test_duration, max_ops, ops_per_stage); //(0, 1000000, 1000000)
     for (size_t i = 0; i < num_key_gens; i++) {
       key_gens[i].reset(new KeyGenerator(&(thread->rand), write_mode,
                                          num_ + max_num_range_tombstones_,
@@ -4401,7 +4631,7 @@ class Benchmark {
 
     RandomGenerator gen;
     WriteBatch batch(/*reserved_bytes=*/0, /*max_bytes=*/0,
-                     user_timestamp_size_);
+                     user_timestamp_size_); // (0,0,0)
     Status s;
     int64_t bytes = 0;
 
@@ -4413,21 +4643,21 @@ class Benchmark {
     Slice end_key = AllocateKey(&end_key_guard);
     std::vector<std::unique_ptr<const char[]>> expanded_key_guards;
     std::vector<Slice> expanded_keys;
-    if (FLAGS_expand_range_tombstones) {
-      expanded_key_guards.resize(range_tombstone_width_);
+    if (FLAGS_expand_range_tombstones) { // false
+      expanded_key_guards.resize(range_tombstone_width_); // 100
       for (auto& expanded_key_guard : expanded_key_guards) {
         expanded_keys.emplace_back(AllocateKey(&expanded_key_guard));
       }
     }
 
     std::unique_ptr<char[]> ts_guard;
-    if (user_timestamp_size_ > 0) {
+    if (user_timestamp_size_ > 0) { // 0
       ts_guard.reset(new char[user_timestamp_size_]);
     }
 
     int64_t stage = 0;
     int64_t num_written = 0;
-    while (!duration.Done(entries_per_batch_)) {
+    while (!duration.Done(entries_per_batch_)) {// 每次插入一个值，执行1000000次
       if (duration.GetStage() != stage) {
         stage = duration.GetStage();
         if (db_.db != nullptr) {
@@ -4444,9 +4674,10 @@ class Benchmark {
       batch.Clear();
       int64_t batch_bytes = 0;
 
+      // 执行一个batch
       for (int64_t j = 0; j < entries_per_batch_; j++) {
-        int64_t rand_num = key_gens[id]->Next();
-        GenerateKeyFromInt(rand_num, FLAGS_num, &key);
+        int64_t rand_num = key_gens[id]->Next(); // 调用一次Next()，返回一个用于生成key的num
+        GenerateKeyFromInt(rand_num, FLAGS_num, &key);//
         Slice val = gen.Generate();
         if (use_blob_db_) {
 #ifndef ROCKSDB_LITE
@@ -4465,10 +4696,9 @@ class Benchmark {
           // We use same rand_num as seed for key and column family so that we
           // can deterministically find the cfh corresponding to a particular
           // key while reading the key.
-          batch.Put(db_with_cfh->GetCfh(rand_num), key,
-                    val);
+          batch.Put(db_with_cfh->GetCfh(rand_num), key, val);
         }
-        batch_bytes += val.size() + key_size_ + user_timestamp_size_;
+        batch_bytes += val.size() + key_size_ + user_timestamp_size_; // key_size = 16
         bytes += val.size() + key_size_ + user_timestamp_size_;
         ++num_written;
         if (writes_per_range_tombstone_ > 0 &&
@@ -4515,7 +4745,7 @@ class Benchmark {
             }
           }
         }
-      }
+      } // endfor
       if (thread->shared->write_rate_limiter.get() != nullptr) {
         thread->shared->write_rate_limiter->Request(
             batch_bytes, Env::IO_HIGH,
@@ -4534,9 +4764,10 @@ class Benchmark {
           ErrorExit();
         }
       }
-      if (!use_blob_db_) {
+      if (!use_blob_db_) { // !false
         s = db_with_cfh->db->Write(write_options_, &batch);
       }
+      // 这里定期会打印已经完成的操作数，每10000次
       thread->stats.FinishedOps(db_with_cfh, db_with_cfh->db,
                                 entries_per_batch_, kWrite);
       if (FLAGS_sine_write_rate) {
@@ -4570,6 +4801,158 @@ class Benchmark {
       }
     }
     thread->stats.AddBytes(bytes);
+  }
+
+  void YCSBWorkloadA(ThreadState* thread)
+  {
+    // 最后一个线程负责记录每个操作的延迟和每秒的吞吐量
+    if (thread->tid == thread->shared->total - 1)
+    {
+      uint64_t start_time = thread->stats.GetStart();
+      uint64_t last_ops = 0;
+      uint64_t last_time = start_time;
+      uint64_t now_done = 0;
+      uint64_t per_second_done;
+      uint64_t now_time;
+
+      // 统计每秒的操作数
+      // 统计每秒的吞吐量
+      // 将每秒的操作latency打log，
+      while (true)
+      {
+        if(thread->shared->num_done >= thread->shared->total - 1)break;
+        sleep(1);
+
+        now_time = FLAGS_env->NowMicros();
+        thread->shared->latencys_mutex.Lock();
+        now_done = thread->shared->ops_num;
+        thread->shared->latencys_mutex.Unlock();
+
+        per_second_done = now_done - last_ops;
+        uint64_t eBytes = per_second_done * (key_size_+FLAGS_value_size);
+        uint64_t now_bytes = now_done * (key_size_+FLAGS_value_size);
+        double use_time = (now_time - last_time)*1e-6;
+        double now = (now_time - last_ops)*1e-6;
+
+        LZW_LOG(1,"now=,%.2f,s speed=,%.2f,MB/s,%.1f,iops size=,%.1f,MB average=,%.2f,MB/s,%.1f,iops ,\n",
+                    now,(1.0*eBytes/1048576.0)/use_time,1.0*per_second_done/use_time,1.0*now_bytes/1048576.0,
+                    (1.0*now_bytes/1048576.0)/now,1.0*now_done/now);
+        
+        uint64_t *ops_latency = thread->shared->latencys;
+        std::sort(ops_latency + last_ops, ops_latency + now_done);
+
+        if (per_second_done > 2) {
+          uint64_t cnt90 = 0.90 * per_second_done - 1 + last_ops;
+          uint64_t cnt99 = 0.99 * per_second_done - 1 + last_ops;
+          uint64_t cnt999 = 0.999 * per_second_done - 1 + last_ops;
+          uint64_t cnt9999 = 0.9999 * per_second_done - 1 + last_ops;
+          uint64_t cnt99999 = 0.99999 * per_second_done - 1 + last_ops;
+
+          //printf("per_second_done:%lu,last_ops:%lu,cnt90:%lu,cnt99:%lu,%lu,%lu,%lu\n",per_second_done,last_ops,cnt90,cnt99,cnt999,cnt9999,cnt99999);
+
+          LZW_LOG(5,"%.2f,%.1f,%lu,,,%lu,,,%lu,,,%lu,,,%lu,,,\n",
+                    now,1.0*per_second_done/use_time,
+                    ops_latency[cnt90],
+                    ops_latency[cnt99],
+                    ops_latency[cnt999],
+                    ops_latency[cnt9999],
+                    ops_latency[cnt99999]);
+        }
+
+        last_ops = now_done;
+        last_time = now_time;
+      }
+      return;
+    }
+
+    ReadOptions options(FLAGS_verify_checksum, true);
+    RandomGenerator gen;
+
+    // init_zipf_generator(0, FLAGS_num);
+
+    std::string value;
+    int64_t found = 0;
+    uint64_t per_op_start_time = 0;
+
+    int64_t reads_done = 0;
+    int64_t writes_done = 0;
+    Duration duration(FLAGS_duration, FLAGS_ycsb_workloada_num);
+
+    std::unique_ptr<const char[]> key_guard;
+    Slice key = AllocateKey(&key_guard);
+
+    if(FLAGS_benchmark_write_rate_limit > 0)
+    {
+      printf(">>>> FLAGS_benchmark_write_rate_limit YCSBA \n");
+      thread->shared->write_rate_limiter.reset(
+        NewGenericRateLimiter(FLAGS_benchmark_write_rate_limit)
+      );
+    }
+
+    while(!duration.Done(1))
+    {
+      DB* db = SelectDB(thread);
+
+      long k;
+      if (true||FLAGS_YCSB_uniform_distribution)
+      {
+        k = thread->rand.Next() % FLAGS_num;
+      } 
+      else
+      {
+        // k = nextValue()
+      }
+      GenerateKeyFromInt(k, FLAGS_num, &key);
+
+      if (FLAGS_report_ops_latency)
+      {
+        per_op_start_time = FLAGS_env->NowMicros();
+      }
+
+      // YCSB A负载，一半概率读，一半概率写
+      int next_op = thread->rand.Next() % 100;
+      if(next_op < 50)
+      {
+        // read
+        Status s = db->Get(options, key, &value);
+        if(!s.ok()&&!s.IsNotFound())
+        {
+          fprintf(stderr, "k=%ld; get error: %s\n", k, s.ToString().c_str());
+        }
+        else if(!s.IsNotFound())
+        {
+          found++;
+        }
+        thread->stats.FinishedOps(nullptr, db, 1, kRead);
+        reads_done++;
+      }
+      else
+      {
+        Status s = db->Put(write_options_, key, gen.Generate(FLAGS_value_size));
+        if(!s.ok())
+        {
+          fprintf(stderr, "put error: %s\n", s.ToString().c_str());
+        }
+        else
+        {
+          writes_done++;
+          thread->stats.FinishedOps(nullptr, db, 1, kWrite);
+        }
+      }
+
+      if (FLAGS_report_ops_latency)
+      {
+        thread->shared->latencys_mutex.Lock();
+        thread->shared->latencys[thread->shared->ops_num] = FLAGS_env->NowMicros() - per_op_start_time;
+        thread->shared->ops_num++;
+        thread->shared->latencys_mutex.Unlock();
+      }
+    }
+    char msg[100];
+    snprintf(msg, sizeof(msg), "( reads:%" PRIu64 " writes:%" PRIu64 \
+             " total:%" PRIu64 " found:%" PRIu64 ")",
+             reads_done, writes_done, FLAGS_ycsb_workloada_num, found);
+    thread->stats.AddMessage(msg);
   }
 
   Status DoDeterministicCompact(ThreadState* thread,
@@ -7250,6 +7633,7 @@ class Benchmark {
   }
 };
 
+// ZYN 测试入口
 int db_bench_tool(int argc, char** argv) {
   ROCKSDB_NAMESPACE::port::InstallStackTraceHandler();
   static bool initialized = false;
