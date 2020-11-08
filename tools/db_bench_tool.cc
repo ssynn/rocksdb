@@ -73,6 +73,7 @@
 #include "utilities/merge_operators/bytesxor.h"
 #include "utilities/merge_operators/sortlist.h"
 #include "utilities/persistent_cache/block_cache_tier.h"
+#include "utilities/my_log.h"
 
 #include <algorithm>
 #include <queue>
@@ -862,7 +863,7 @@ DEFINE_uint64(blob_db_file_size,
               ROCKSDB_NAMESPACE::blob_db::BlobDBOptions().blob_file_size,
               "Target size of each blob file.");
 
-DEFINE_string(blob_db_compression_type, "snappy",
+DEFINE_string(blob_db_compression_type, "none",
               "Algorithm to use to compress blob in blob file");
 static enum ROCKSDB_NAMESPACE::CompressionType
     FLAGS_blob_db_compression_type_e = ROCKSDB_NAMESPACE::kSnappyCompression;
@@ -940,7 +941,7 @@ static std::string ColumnFamilyName(size_t i) {
   }
 }
 
-DEFINE_string(compression_type, "snappy",
+DEFINE_string(compression_type, "none",
               "Algorithm to use to compress the database");
 static enum ROCKSDB_NAMESPACE::CompressionType FLAGS_compression_type_e =
     ROCKSDB_NAMESPACE::kSnappyCompression;
@@ -1402,83 +1403,6 @@ static const bool FLAGS_table_cache_numshardbits_dummy __attribute__((__unused__
                           &ValidateTableCacheNumshardbits);
 
 namespace ROCKSDB_NAMESPACE {
-
-  const std::string log_file0("NVM_LOG");
-  const std::string log_file1("OP_TIME.csv");
-  const std::string log_file2("OP_DATA");
-  const std::string log_file3("compaction.csv");
-  const std::string log_file4("Latency.csv");
-  const std::string log_file5("PerSecondLatency.csv");
-
-  void LZW_LOG(int file_num, const char* format, ...) {
-  va_list ap;
-  va_start(ap, format);
-  char buf[8192];
-  vsprintf(buf, format, ap);
-  va_end(ap);
-
-  const std::string* log_file;
-  switch (file_num) {
-    case 0:
-      log_file = &log_file0;
-      break;
-    case 1:
-      log_file = &log_file1;
-      break;
-    case 2:
-      log_file = &log_file2;
-      break;
-    case 3:
-      log_file = &log_file3;
-      break;
-    case 4:
-      log_file = &log_file4;
-      break;
-    case 5:
-      log_file = &log_file5;
-      break;
-    default:
-      return;
-  }
-
-  FILE* fp = fopen(log_file->c_str(), "a");
-  if (fp == nullptr) printf("log failed\n");
-  fprintf(fp, "%s", buf);
-  fclose(fp);
-}
-
-
-void init_log_file() {
-  FILE* fp;
-  fp = fopen(log_file1.c_str(), "w");
-  if (fp == nullptr) printf("log failed\n");
-  fclose(fp);
-
-  fp = fopen(log_file2.c_str(), "w");
-  if (fp == nullptr) printf("log failed\n");
-  fclose(fp);
-
-  fp = fopen(log_file3.c_str(), "w");
-  if(fp == nullptr) printf("log failed\n");
-  fclose(fp);
-  LZW_LOG(3,"compaction,read(MB),write(MB),time(s),start(s),is_level0\n");
-
-  fp = fopen(log_file4.c_str(), "w");
-  if(fp == nullptr) printf("log failed\n");
-  fclose(fp);
-
-  fp = fopen(log_file5.c_str(), "w");
-  if(fp == nullptr) printf("log failed\n");
-  fclose(fp);
-  LZW_LOG(5,"now(s),through(iops),p90,,,p99,,,p999,,,p9999,,,p99999,,,\n");
-
-
-  // fp = fopen(log_file0.c_str(), "w");
-  // if (fp == nullptr) printf("log failed\n");
-  // fclose(fp);
-
-}
-
 
 
 namespace {

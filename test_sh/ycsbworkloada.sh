@@ -4,7 +4,7 @@
 
 bench_db_path="/tmp/rocksdb_ycsbworkloada"
 value_size="1024"
-bench_compression="none"
+compression_type="none"
 histogram="true"
 benchmarks="ycsbwklda,stats"
 max_background_jobs="2"
@@ -69,6 +69,10 @@ function FILL_PARAMS(){
     if [ -n "$ycsb_workloada_num" ];then
         const_params=$const_params"--ycsb_workloada_num=$ycsb_workloada_num "
     fi
+
+    if [ -n "$compression_type" ];then
+        const_params=$const_params"--compression_type=$compression_type "
+    fi
 }
 
 # 把输出的一堆乱七八糟的文件拷贝到result文件夹
@@ -88,14 +92,14 @@ COPY_OUT_FILE(){
 
 
 
-bench_file_path="$(dirname $PWD)/build/db_bench"
+bench_file_path="$(dirname $PWD)/db_bench"
 bench_file_dir="$PWD"
 
 FILL_PARAMS
 
 
 if [ ! -f "$bench_file_path" ];then
-    bench_file_path="$(dirname $PWD)/db_bench"
+    bench_file_path="$(dirname $PWD)/build/db_bench"
 fi
 
 if [ ! -f "$bench_file_path" ];then

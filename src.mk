@@ -269,6 +269,8 @@ LIB_SOURCES =                                                   \
   utilities/ttl/db_ttl_impl.cc                                  \
   utilities/write_batch_with_index/write_batch_with_index.cc    \
   utilities/write_batch_with_index/write_batch_with_index_internal.cc    \
+  utilities/my_log.cc   \
+  utilities/zipf.cc     \
 
 ifeq ($(ARMCRC_SOURCE),1)
 LIB_SOURCES +=\
