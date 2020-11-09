@@ -73,12 +73,15 @@
 #include "utilities/merge_operators/bytesxor.h"
 #include "utilities/merge_operators/sortlist.h"
 #include "utilities/persistent_cache/block_cache_tier.h"
+
+
 #include "utilities/my_log.h"
 
 #include <algorithm>
 #include <queue>
 #include <sys/syscall.h>
 
+#define REQUEST_QUEUE 1
 
 #ifdef MEMKIND
 #include "memory/memkind_kmem_allocator.h"
@@ -3159,6 +3162,9 @@ class Benchmark {
       } else if (name == "ycsbwklda"){
         fresh_db = true;
         method = &Benchmark::YCSBWorkloadA;
+      } else if(name=="fillrandomwithmoniter") {
+        fresh_db = true;
+        method = &Benchmark::FillRandomWithMoniter;
       } else if (name == "overwrite") {
         method = &Benchmark::WriteRandom;
       } else if (name == "fillsync") {
@@ -3558,6 +3564,13 @@ class Benchmark {
       shared.total = n;
     }
 
+    if(FLAGS_report_ops_latency && (method == &Benchmark::FillRandomWithMoniter))
+    {
+      shared.latencys = new uint64_t[FLAGS_num];
+      n++;
+      shared.total = n;
+    }
+
     ThreadArg* arg = new ThreadArg[n];
 
     for (int i = 0; i < n; i++) {
@@ -3607,6 +3620,12 @@ class Benchmark {
     merge_stats.Report(name);
 
     if ( FLAGS_report_ops_latency && (method == &Benchmark::YCSBWorkloadA)) {
+      delete[] shared.latencys;
+      shared.latencys = nullptr;
+    }
+
+    if( FLAGS_report_ops_latency && (method == &Benchmark::FillRandomWithMoniter))
+    {
       delete[] shared.latencys;
       shared.latencys = nullptr;
     }
@@ -4581,6 +4600,7 @@ class Benchmark {
 
     int64_t stage = 0;
     int64_t num_written = 0;
+    uint64_t per_op_start_time = 0;
     while (!duration.Done(entries_per_batch_)) {// 每次插入一个值，执行1000000次
       if (duration.GetStage() != stage) {
         stage = duration.GetStage();
@@ -4597,6 +4617,12 @@ class Benchmark {
       DBWithColumnFamilies* db_with_cfh = SelectDBWithCfh(id);
       batch.Clear();
       int64_t batch_bytes = 0;
+
+      // 这里记录一个batch操作的latency
+      if (FLAGS_report_ops_latency)
+      {
+        per_op_start_time = FLAGS_env->NowMicros();
+      }
 
       // 执行一个batch
       for (int64_t j = 0; j < entries_per_batch_; j++) {
@@ -4670,6 +4696,15 @@ class Benchmark {
           }
         }
       } // endfor
+
+      // 记录自己的latency
+      if (FLAGS_report_ops_latency)
+      {
+        thread->shared->latencys_mutex.Lock();
+        thread->shared->latencys[thread->shared->ops_num] = FLAGS_env->NowMicros() - per_op_start_time;
+        thread->shared->ops_num++;
+        thread->shared->latencys_mutex.Unlock();
+      }
       if (thread->shared->write_rate_limiter.get() != nullptr) {
         thread->shared->write_rate_limiter->Request(
             batch_bytes, Env::IO_HIGH,
@@ -4725,6 +4760,89 @@ class Benchmark {
       }
     }
     thread->stats.AddBytes(bytes);
+  }
+
+  void FillRandomWithMoniter(ThreadState* thread)
+  {
+    // 最后一个线程负责记录每个操作的延迟和吞吐量
+    if (thread->tid == thread->shared->total - 1)
+    {
+      uint64_t start_time = thread->stats.GetStart();
+      uint64_t last_ops = 0;
+      uint64_t last_time = start_time;
+      uint64_t now_done = 0;
+      uint64_t per_second_done;
+      uint64_t now_time;
+
+      // 统计每秒的操作数
+      // 统计每秒的吞吐量
+      // 将每秒的操作latency打log，
+      while (true)
+      {
+        if(thread->shared->num_done >= thread->shared->total - 1)break;
+        sleep(1);
+
+        now_time = FLAGS_env->NowMicros();
+        thread->shared->latencys_mutex.Lock();
+        now_done = thread->shared->ops_num;
+        thread->shared->latencys_mutex.Unlock();
+
+        per_second_done = now_done - last_ops;
+        uint64_t eBytes = per_second_done * (key_size_+FLAGS_value_size);
+        uint64_t now_bytes = now_done * (key_size_+FLAGS_value_size);
+        double use_time = (now_time - last_time)*1e-6;
+        double now = (now_time - start_time)*1e-6;
+
+        LZW_LOG(1,"now=,%.2f,s speed=,%.2f,MB/s,%.1f,iops size=,%.1f,MB average=,%.2f,MB/s,%.1f,iops,\n",
+                    now,(1.0*eBytes/1048576.0)/use_time/*throughput*/,1.0*per_second_done/use_time/*ops*/,1.0*now_bytes/1048576.0,
+                    (1.0*now_bytes/1048576.0)/now,1.0*now_done/now);
+        
+        uint64_t *ops_latency = thread->shared->latencys;
+        std::sort(ops_latency + last_ops, ops_latency + now_done);
+
+        if (per_second_done > 2) {
+          uint64_t cnt90 = 0.90 * per_second_done - 1 + last_ops;
+          uint64_t cnt99 = 0.99 * per_second_done - 1 + last_ops;
+          uint64_t cnt999 = 0.999 * per_second_done - 1 + last_ops;
+          uint64_t cnt9999 = 0.9999 * per_second_done - 1 + last_ops;
+          uint64_t cnt99999 = 0.99999 * per_second_done - 1 + last_ops;
+
+          //printf("per_second_done:%lu,last_ops:%lu,cnt90:%lu,cnt99:%lu,%lu,%lu,%lu\n",per_second_done,last_ops,cnt90,cnt99,cnt999,cnt9999,cnt99999);
+
+          LZW_LOG(5,"%.2f,%.1f,%lu,,,%lu,,,%lu,,,%lu,,,%lu,,,\n",
+                    now,1.0*per_second_done/use_time,
+                    ops_latency[cnt90],
+                    ops_latency[cnt99],
+                    ops_latency[cnt999],
+                    ops_latency[cnt9999],
+                    ops_latency[cnt99999]);
+        }
+
+        last_ops = now_done;
+        last_time = now_time;
+      }
+      return;
+    }
+    DoWrite(thread, RANDOM);
+  }
+
+  // TODO
+  // Thread 0 -- record latency and throughput per second
+  // Thread 1 -- the workload threads. Control request speed and push request to queues
+  // Thread REQUEST_QUEUE 2 ~ REQUEST_QUEUE -- pop request from queues and put in db
+  void FillRandomControlRequest(ThreadState* thread)
+  {
+    if(thread->shared->total < REQUEST_QUEUE + 2)
+    {
+      printf("Error:Test FillRandomControlRequest need %d threads\n",REQUEST_QUEUE + 2);
+      return;
+    }
+    // 负责记录操作latency和throughput
+    if( thread->tid == 0)
+    {
+      
+    }
+
   }
 
   void YCSBWorkloadA(ThreadState* thread)
@@ -7559,6 +7677,7 @@ class Benchmark {
 
 // ZYN 测试入口
 int db_bench_tool(int argc, char** argv) {
+  printf("db_bench_start\n");
   init_log_file();
   ROCKSDB_NAMESPACE::port::InstallStackTraceHandler();
   static bool initialized = false;
@@ -7708,5 +7827,9 @@ int db_bench_tool(int argc, char** argv) {
 
   return 0;
 }
+
 }  // namespace ROCKSDB_NAMESPACE
+
+
+
 #endif

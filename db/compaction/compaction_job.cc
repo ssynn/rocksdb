@@ -65,6 +65,9 @@
 #include "util/stop_watch.h"
 #include "util/string_util.h"
 
+#include "utilities/global_statistic.h"
+#include "utilities/my_log.h"
+
 namespace ROCKSDB_NAMESPACE {
 
 const char* GetCompactionReasonString(CompactionReason compaction_reason) {
@@ -807,6 +810,19 @@ Status CompactionJob::Install(const MutableCFOptions& mutable_cf_options) {
   }
 
   const std::string& column_family_name = cfd->GetName();
+
+// #ifdef STATISTIC_OPEN
+//   if (compact_->compaction->GetColumnCompactionItem() == nullptr) {  //正常
+//     uint64_t read_all = stats.bytes_read_non_output_levels + stats.bytes_read_output_level;
+//     uint64_t start_time = get_now_micros() - stats.micros - global_stats.start_time;
+//     RECORD_INFO(3,"%ld,%.2f,%.2f,%.5f,%.3f\n",++global_stats.compaction_num, 1.0*read_all/1048576.0,1.0*stats.bytes_written/1048576.0,1.0*stats.micros*1e-6,1.0*start_time*1e-6);
+//   }
+//   else{  //column compaction
+//     uint64_t read_all = compact_->compaction->GetColumnCompactionItem()->L0select_size + stats.bytes_read_output_level;
+//         uint64_t start_time = get_now_micros() - stats.micros - global_stats.start_time;
+//     RECORD_INFO(3,"%ld,%.2f,%.2f,%.5f,%.3f,%d\n",++global_stats.compaction_num, 1.0*read_all/1048576.0,1.0*stats.bytes_written/1048576.0,1.0*stats.micros*1e-6,1.0*start_time*1e-6,true);
+//   }
+// #endif
 
   ROCKS_LOG_BUFFER(
       log_buffer_,

@@ -271,6 +271,7 @@ LIB_SOURCES =                                                   \
   utilities/write_batch_with_index/write_batch_with_index_internal.cc    \
   utilities/my_log.cc   \
   utilities/zipf.cc     \
+  utilities/global_statistic.cc \
 
 ifeq ($(ARMCRC_SOURCE),1)
 LIB_SOURCES +=\

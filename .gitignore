@@ -93,3 +93,4 @@ clang-format-diff.py
 
 */test.sh
 */result
+*.csv
