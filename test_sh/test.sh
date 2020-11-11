@@ -21,5 +21,5 @@ limit="`expr 256 \* 1024 \* 1024`"
 
 # echo 3 > /proc/sys/vm/drop_caches
 
-mkdir aa
-cd aa
+para="para: $1"
+echo $para

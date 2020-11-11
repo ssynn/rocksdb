@@ -14,7 +14,7 @@ benchmark_write_rate_limit="`expr 20000 \* \( $value_size + 16 \)`"  #20K iops, 
 report_ops_latency="true"
 report_fillrandom_latency="true"
 
-YCSB_uniform_distribution="true"
+YCSB_distribution="1"
 ycsb_workloada_num="100000"
 num="200000"
 threads="2"
@@ -62,8 +62,8 @@ function FILL_PARAMS(){
         const_params=$const_params"--report_fillrandom_latency=$report_fillrandom_latency "
     fi
 
-    if [ -n "$YCSB_uniform_distribution" ];then
-        const_params=$const_params"--YCSB_uniform_distribution=$YCSB_uniform_distribution "
+    if [ -n "$YCSB_distribution" ];then
+        const_params=$const_params"--YCSB_distribution=$YCSB_distribution "
     fi
 
     if [ -n "$ycsb_workloada_num" ];then

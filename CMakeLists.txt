@@ -831,6 +831,7 @@ set(SOURCES
         utilities/my_log.cc
         utilities/zipf.cc
         utilities/global_statistic.cc
+        utilities/distribution_generator.cc
         $<TARGET_OBJECTS:build_version>)
 
 if(HAVE_SSE42 AND NOT MSVC)

@@ -272,6 +272,7 @@ LIB_SOURCES =                                                   \
   utilities/my_log.cc   \
   utilities/zipf.cc     \
   utilities/global_statistic.cc \
+  utilities/distribution_generator.cc \
 
 ifeq ($(ARMCRC_SOURCE),1)
 LIB_SOURCES +=\

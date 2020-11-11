@@ -76,6 +76,7 @@
 
 
 #include "utilities/my_log.h"
+#include "utilities/distribution_generator.h"
 
 #include <algorithm>
 #include <queue>
@@ -234,7 +235,7 @@ DEFINE_bool(report_fillrandom_latency, false,"");
 
 DEFINE_int64(ycsb_workloada_num, 1000000,"");
 
-DEFINE_bool(YCSB_uniform_distribution, false, "Uniform key distribution for YCSB");
+DEFINE_int32(YCSB_distribution, 0, "key distribution for YCSB: Uniform=0|Zipfian=1|Latest=2");
 
 DEFINE_int64(num, 1000000, "Number of key/values to place in database");
 
@@ -1331,6 +1332,12 @@ enum RepFactory {
   kPrefixHash,
   kVectorRep,
   kHashLinkedList,
+};
+
+enum Distribution {
+  Uniform,
+  Zipfian,
+  Latest,
 };
 
 static enum RepFactory StringToRepFactory(const char* ctype) {
@@ -2650,6 +2657,22 @@ class Benchmark {
         break;
     }
     fprintf(stdout, "Perf Level: %d\n", FLAGS_perf_level);
+    
+    switch (FLAGS_YCSB_distribution)
+    {
+    case Uniform:
+      fprintf(stdout, "Distribution uniform\n");
+      break;
+    case Zipfian:
+      fprintf(stdout, "Distribution Zipfian\n");
+      break;
+    case Latest:
+      fprintf(stdout, "Distribution Latest\n");
+      break;
+    
+    default:
+      break;
+    }
 
     PrintWarnings(compression.c_str());
     fprintf(stdout, "------------------------------------------------\n");
@@ -4909,6 +4932,16 @@ class Benchmark {
 
     ReadOptions options(FLAGS_verify_checksum, true);
     RandomGenerator gen;
+    // if (FLAGS_YCSB_distribution == Zipfian)
+    
+      ZipfianGenerator zipf(FLAGS_num);
+    
+    // else if (FLAGS_YCSB_distribution == Latest)
+    
+      CounterGenerator temp(3);
+      temp.Set(FLAGS_num);
+      SkewedLatestGenerator latest(temp);
+    
 
     // init_zipf_generator(0, FLAGS_num);
 
@@ -4936,13 +4969,18 @@ class Benchmark {
       DB* db = SelectDB(thread);
 
       long k;
-      if (true||FLAGS_YCSB_uniform_distribution)
+      if (FLAGS_YCSB_distribution == Uniform)
       {
         k = thread->rand.Next() % FLAGS_num;
       } 
+      else if(FLAGS_YCSB_distribution == Zipfian )
+      {
+        // 使用zipfian分布
+        k = (long)zipf.Next();
+      }
       else
       {
-        // k = nextValue()
+        k = (long)latest.Next();
       }
       GenerateKeyFromInt(k, FLAGS_num, &key);
 
