@@ -14,9 +14,9 @@ benchmark_write_rate_limit="`expr 20000 \* \( $value_size + 16 \)`"  #20K iops, 
 report_ops_latency="true"
 report_fillrandom_latency="true"
 
-YCSB_distribution="1"
-ycsb_workloada_num="100000"
-num="200000"
+YCSB_distribution="2" # uniform=0 zipfian=1 latest=2
+ycsb_workloada_num="500"
+num="1000"
 threads="2"
 
 const_params=""

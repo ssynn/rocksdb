@@ -2435,6 +2435,11 @@ struct SharedState {
   uint64_t ops_num = 0;
   uint64_t ops_bytes = 0;
 
+  port::Mutex distribute_mutex;
+  ZipfianGenerator* zipf;
+  // CounterGenerator* temp;
+  SkewedLatestGenerator* latest;
+
   SharedState() : cv(&mu), perf_level(FLAGS_perf_level) { }
 };
 
@@ -3563,6 +3568,9 @@ class Benchmark {
     shared.num_initialized = 0;
     shared.num_done = 0;
     shared.start = false;
+    shared.zipf = new ZipfianGenerator(0, FLAGS_num);
+    CounterGenerator temp(FLAGS_num);
+    shared.latest = new SkewedLatestGenerator(temp);
     if (FLAGS_benchmark_write_rate_limit > 0) {
       shared.write_rate_limiter.reset(
           NewGenericRateLimiter(FLAGS_benchmark_write_rate_limit));
@@ -4932,15 +4940,6 @@ class Benchmark {
 
     ReadOptions options(FLAGS_verify_checksum, true);
     RandomGenerator gen;
-    // if (FLAGS_YCSB_distribution == Zipfian)
-    
-      ZipfianGenerator zipf(FLAGS_num);
-    
-    // else if (FLAGS_YCSB_distribution == Latest)
-    
-      CounterGenerator temp(3);
-      temp.Set(FLAGS_num);
-      SkewedLatestGenerator latest(temp);
     
 
     // init_zipf_generator(0, FLAGS_num);
@@ -4976,11 +4975,17 @@ class Benchmark {
       else if(FLAGS_YCSB_distribution == Zipfian )
       {
         // 使用zipfian分布
-        k = (long)zipf.Next();
+        thread->shared->distribute_mutex.Lock();
+        k = (long)thread->shared->zipf->Next();
+        LZW_LOG(4, "%ld\n", k);
+        thread->shared->distribute_mutex.Unlock();
       }
       else
       {
-        k = (long)latest.Next();
+        thread->shared->distribute_mutex.Lock();
+        k = (long)thread->shared->latest->Next();
+        LZW_LOG(4, "%ld\n", k);
+        thread->shared->distribute_mutex.Unlock();
       }
       GenerateKeyFromInt(k, FLAGS_num, &key);
 

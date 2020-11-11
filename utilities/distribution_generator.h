@@ -123,11 +123,11 @@ class UniformGenerator {
 class CounterGenerator {
  public:
   CounterGenerator(uint64_t start) : counter_(start) { }
-  uint64_t Next() { return counter_.fetch_add(1); }
-  uint64_t Last() { return counter_.load() - 1; }
-  void Set(uint64_t start) { counter_.store(start); }
+  uint64_t Next() { return ++counter_; }
+  uint64_t Last() { return counter_ - 1; }
+  void Set(uint64_t start) { counter_ = start; }
  private:
-  std::atomic<uint64_t> counter_;
+  uint64_t counter_;
 };
 
 
@@ -144,7 +144,7 @@ class SkewedLatestGenerator {
  private:
   CounterGenerator &basis_;
   ZipfianGenerator zipfian_;
-  std::atomic<uint64_t> last_;
+  uint64_t last_;
 };
 
 
