@@ -5,7 +5,8 @@
 bench_db_path="/tmp/rocksdb_ycsbworkloada"
 value_size="1024"
 compression_type="none"
-histogram="true"
+# histogram="true"
+histogram_accurate="true"
 benchmarks="ycsbwklda,stats"
 max_background_jobs="2"
 max_bytes_for_level_base="`expr 256 \* 1024 \* 1024`"
@@ -14,9 +15,9 @@ benchmark_write_rate_limit="`expr 20000 \* \( $value_size + 16 \)`"  #20K iops, 
 report_ops_latency="true"
 report_fillrandom_latency="true"
 
-YCSB_distribution="2" # uniform=0 zipfian=1 latest=2
-ycsb_workloada_num="500"
-num="1000"
+YCSB_distribution="1" # uniform=0 zipfian=1 latest=2
+ycsb_workloada_num="10000"
+num="20000"
 threads="2"
 
 const_params=""
@@ -73,6 +74,10 @@ function FILL_PARAMS(){
     if [ -n "$compression_type" ];then
         const_params=$const_params"--compression_type=$compression_type "
     fi
+
+    if [ -n "$histogram_accurate" ];then
+        const_params=$const_params"--histogram_accurate=$histogram_accurate "
+    fi
 }
 
 # 把输出的一堆乱七八糟的文件拷贝到result文件夹
@@ -87,6 +92,7 @@ COPY_OUT_FILE(){
     \mv -f $bench_file_dir/Latency.csv $res_dir/
     \mv -f $bench_file_dir/PerSecondLatency.csv $res_dir/
     \mv -f $db/OPTIONS-* $res_dir/
+    \mv -f $bench_file_dir/*out $res_dir/
     #\cp -f $db/LOG $res_dir/
 }
 

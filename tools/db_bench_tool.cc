@@ -341,6 +341,8 @@ DEFINE_double(read_random_exp_range, 0.0,
 
 DEFINE_bool(histogram, false, "Print histogram of operation timings");
 
+DEFINE_bool(histogram_accurate, false, "Print histogram of operation timings");
+
 DEFINE_bool(enable_numa, false,
             "Make operations aware of NUMA architecture and bind memory "
             "and cpus corresponding to nodes together. In NUMA, memory "
@@ -2051,7 +2053,7 @@ class Stats {
     if (reporter_agent_) {
       reporter_agent_->ReportFinishedOps(num_ops);
     }
-    if (FLAGS_histogram) {
+    if (FLAGS_histogram&&!FLAGS_histogram_accurate) {
       uint64_t now = FLAGS_env->NowMicros();
       uint64_t micros = now - last_op_finish_;
 
@@ -2160,6 +2162,29 @@ class Stats {
     }
   }
 
+  void FinishedOps(DBWithColumnFamilies* db_with_cfh, DB* db, int64_t num_ops,
+                   uint64_t latency, enum OperationType op_type = kOthers)
+  {
+    if (FLAGS_histogram_accurate) {
+      uint64_t now = FLAGS_env->NowMicros();
+      uint64_t micros = latency;
+
+      if (hist_.find(op_type) == hist_.end())
+      {
+        auto hist_temp = std::make_shared<HistogramImpl>();
+        hist_.insert({op_type, std::move(hist_temp)});
+      }
+      hist_[op_type]->Add(micros);// 记录对应操作的用时，用于生成直方图
+
+      if (micros > 20000 && !FLAGS_stats_interval) {
+        fprintf(stderr, "long op: %" PRIu64 " micros%30s\r", micros, "");
+        fflush(stderr);
+      }
+      last_op_finish_ = now;
+    }
+    FinishedOps(db_with_cfh, db, num_ops, op_type);
+  }
+
   void AddBytes(int64_t n) {
     bytes_ += n;
   }
@@ -2189,7 +2214,7 @@ class Stats {
             (long)throughput,
             (extra.empty() ? "" : " "),
             extra.c_str());
-    if (FLAGS_histogram) {
+    if (FLAGS_histogram || FLAGS_histogram_accurate) {
       for (auto it = hist_.begin(); it != hist_.end(); ++it) {
         fprintf(stdout, "Microseconds per %s:\n%s\n",
                 OperationTypeString[it->first].c_str(),
@@ -4876,6 +4901,13 @@ class Benchmark {
 
   }
 
+  // 线程会分为两种
+  // 1. 记录线程，负责记录每个操作的延迟和每秒的吞吐量
+  // 2. 工作线程，负载对数据库进行读取和写入
+  // 原始的记录方式是记录单次循环的开销，作为单次操作的开销
+  // 工作线程由于自身产生数据和记录LOG会有开销，大量操作在10us，
+  // 所以只在数据库操作前和操作完成后记录时间，以忽略无用对时间
+  // 所以单线程对情况下，数据库基本上不会跑满，至少开两个工作线程
   void YCSBWorkloadA(ThreadState* thread)
   {
     // 最后一个线程负责记录每个操作的延迟和每秒的吞吐量
@@ -4962,13 +4994,13 @@ class Benchmark {
         NewGenericRateLimiter(FLAGS_benchmark_write_rate_limit)
       );
     }
-
+    Status s;
+    DB* db = SelectDB(thread);
+    uint64_t finish_time;
     while(!duration.Done(1))
     {
-      DB* db = SelectDB(thread);
-
       long k;
-      if (FLAGS_YCSB_distribution == Uniform)
+      if (FLAGS_YCSB_distribution == Uniform )
       {
         k = thread->rand.Next() % FLAGS_num;
       } 
@@ -4977,30 +5009,30 @@ class Benchmark {
         // 使用zipfian分布
         thread->shared->distribute_mutex.Lock();
         k = (long)thread->shared->zipf->Next();
-        LZW_LOG(4, "%ld\n", k);
+        // LZW_LOG(4, "%ld\n", k);
         thread->shared->distribute_mutex.Unlock();
       }
       else
       {
         thread->shared->distribute_mutex.Lock();
         k = (long)thread->shared->latest->Next();
-        LZW_LOG(4, "%ld\n", k);
+        // LZW_LOG(4, "%ld\n", k);
         thread->shared->distribute_mutex.Unlock();
       }
       GenerateKeyFromInt(k, FLAGS_num, &key);
 
+      // YCSB A负载，一半概率读，一半概率写
+      int next_op = thread->rand.Next() % 100;
       if (FLAGS_report_ops_latency)
       {
         per_op_start_time = FLAGS_env->NowMicros();
       }
-
-      // YCSB A负载，一半概率读，一半概率写
-      int next_op = thread->rand.Next() % 100;
       if(next_op < 50)
       {
         // read
-        Status s = db->Get(options, key, &value);
-        if(!s.ok()&&!s.IsNotFound())
+        s = db->Get(options, key, &value);
+        finish_time = FLAGS_env->NowMicros() - per_op_start_time;
+        if(false&&!s.ok()&&!s.IsNotFound())
         {
           fprintf(stderr, "k=%ld; get error: %s\n", k, s.ToString().c_str());
         }
@@ -5008,27 +5040,29 @@ class Benchmark {
         {
           found++;
         }
-        thread->stats.FinishedOps(nullptr, db, 1, kRead);
+        thread->stats.FinishedOps(nullptr, db, 1, finish_time, kRead);
         reads_done++;
       }
       else
       {
-        Status s = db->Put(write_options_, key, gen.Generate(FLAGS_value_size));
-        if(!s.ok())
+        // write
+        s = db->Put(write_options_, key, gen.Generate(FLAGS_value_size));
+        finish_time = FLAGS_env->NowMicros() - per_op_start_time;
+        if(false&&!s.ok())
         {
           fprintf(stderr, "put error: %s\n", s.ToString().c_str());
         }
         else
         {
           writes_done++;
-          thread->stats.FinishedOps(nullptr, db, 1, kWrite);
+          thread->stats.FinishedOps(nullptr, db, 1, finish_time, kWrite);
         }
       }
 
       if (FLAGS_report_ops_latency)
       {
         thread->shared->latencys_mutex.Lock();
-        thread->shared->latencys[thread->shared->ops_num] = FLAGS_env->NowMicros() - per_op_start_time;
+        thread->shared->latencys[thread->shared->ops_num] = finish_time;
         thread->shared->ops_num++;
         thread->shared->latencys_mutex.Unlock();
       }
