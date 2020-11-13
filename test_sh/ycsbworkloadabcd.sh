@@ -12,7 +12,7 @@ report_ops_latency="true"
 report_fillrandom_latency="true"
 
 workload="A"
-ycsb_workloada_num="5000000"
+ycsb_workloada_num="500"
 threads="2"
 
 const_params=""
@@ -33,6 +33,7 @@ function FILL_PARAMS(){
     fi
 
     if [ $workload == "C" ];then
+        bench_db_path
         YCSB_write_ratio="0" # A:50, B:5 C:0 D:5
         YCSB_distribution="1" # uniform=0 zipfian=1 latest=2
     fi
