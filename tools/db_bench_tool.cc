@@ -3217,27 +3217,27 @@ class Benchmark {
         method = &Benchmark::WriteUniqueRandom;
       } else if (name == "ycsbwkldabcd") {
         fresh_db = FLAGS_YCSB_write_ratio > 0 ? true : false;
-        printf(">>>> FLAGS_benchmark YCSB \n");
+        fprintf(stdout, ">>>> FLAGS_benchmark YCSB \n");
         switch(FLAGS_YCSB_write_ratio)
         {
         case 50:
-          printf("WORKLOAD: A ");
+          fprintf(stdout, "WORKLOAD: A ");
           break;
         case 0:
-          printf("WORKLOAD: C ");
+          fprintf(stdout, "WORKLOAD: C ");
           break;
         case 5:
           if (FLAGS_YCSB_distribution == Zipfian)
           {
-            printf("WORKLOAD: B ");
+            fprintf(stdout, "WORKLOAD: B ");
           }
           else
           {
-            printf("WORKLOAD: D ");
+            fprintf(stdout, "WORKLOAD: D ");
           }
           break;
         }
-        printf("write ratio: %d freshdb: %d\n", FLAGS_YCSB_write_ratio, fresh_db);
+        fprintf(stdout, "write ratio: %d freshdb: %d\n", FLAGS_YCSB_write_ratio, fresh_db);
 
         method = &Benchmark::YCSBWorkloadABCD;
       }else if (name == "ycsbwklda"){
