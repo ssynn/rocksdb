@@ -143,6 +143,7 @@ DEFINE_string(
     "timeseries,"
     "getmergeoperands"
     "ycsbwklda"
+    "ycsbwkldabcd"
     ,
 
     "Comma-separated list of operations to run in the specified"
@@ -236,6 +237,8 @@ DEFINE_bool(report_fillrandom_latency, false,"");
 DEFINE_int64(ycsb_workloada_num, 1000000,"");
 
 DEFINE_int32(YCSB_distribution, 0, "key distribution for YCSB: Uniform=0|Zipfian=1|Latest=2");
+
+DEFINE_int32(YCSB_write_ratio, 0, "Control the ratio of reading and writing");
 
 DEFINE_int64(num, 1000000, "Number of key/values to place in database");
 
@@ -3212,7 +3215,10 @@ class Benchmark {
           num_threads = 1;
         }
         method = &Benchmark::WriteUniqueRandom;
-      } else if (name == "ycsbwklda"){
+      } else if (name == "ycsbwkldabcd") {
+        fresh_db = FLAGS_YCSB_write_ratio > 0 ? true : false;
+        method = &Benchmark::YCSBWorkloadABCD;
+      }else if (name == "ycsbwklda"){
         fresh_db = true;
         method = &Benchmark::YCSBWorkloadA;
       } else if(name=="fillrandomwithmoniter") {
@@ -3620,6 +3626,13 @@ class Benchmark {
       shared.total = n;
     }
 
+    if(FLAGS_report_ops_latency && (method == &Benchmark::YCSBWorkloadABCD))
+    {
+      shared.latencys = new uint64_t[FLAGS_ycsb_workloada_num * n];
+      n++; // 额外开一个线程用于统计操作latency和每秒吞吐量
+      shared.total = n;
+    }
+
     if(FLAGS_report_ops_latency && (method == &Benchmark::FillRandomWithMoniter))
     {
       shared.latencys = new uint64_t[FLAGS_num];
@@ -3676,6 +3689,12 @@ class Benchmark {
     merge_stats.Report(name);
 
     if ( FLAGS_report_ops_latency && (method == &Benchmark::YCSBWorkloadA)) {
+      delete[] shared.latencys;
+      shared.latencys = nullptr;
+    }
+
+    if (FLAGS_report_ops_latency && (method == &Benchmark::YCSBWorkloadABCD))
+    {
       delete[] shared.latencys;
       shared.latencys = nullptr;
     }
@@ -5032,7 +5051,7 @@ class Benchmark {
         // read
         s = db->Get(options, key, &value);
         finish_time = FLAGS_env->NowMicros() - per_op_start_time;
-        if(false&&!s.ok()&&!s.IsNotFound())
+        if(!s.ok()&&!s.IsNotFound())
         {
           fprintf(stderr, "k=%ld; get error: %s\n", k, s.ToString().c_str());
         }
@@ -5048,7 +5067,166 @@ class Benchmark {
         // write
         s = db->Put(write_options_, key, gen.Generate(FLAGS_value_size));
         finish_time = FLAGS_env->NowMicros() - per_op_start_time;
-        if(false&&!s.ok())
+        if(!s.ok())
+        {
+          fprintf(stderr, "put error: %s\n", s.ToString().c_str());
+        }
+        else
+        {
+          writes_done++;
+          thread->stats.FinishedOps(nullptr, db, 1, finish_time, kWrite);
+        }
+      }
+
+      if (FLAGS_report_ops_latency)
+      {
+        thread->shared->latencys_mutex.Lock();
+        thread->shared->latencys[thread->shared->ops_num] = finish_time;
+        thread->shared->ops_num++;
+        thread->shared->latencys_mutex.Unlock();
+      }
+    }
+    char msg[100];
+    snprintf(msg, sizeof(msg), "( reads:%" PRIu64 " writes:%" PRIu64 \
+             " total:%" PRIu64 " found:%" PRIu64 ")",
+             reads_done, writes_done, FLAGS_ycsb_workloada_num, found);
+    thread->stats.AddMessage(msg);
+  }
+
+  void YCSBWorkloadABCD(ThreadState* thread)
+  {
+    // 最后一个线程负责记录每个操作的延迟和每秒的吞吐量
+    if (thread->tid == thread->shared->total - 1)
+    {
+      uint64_t start_time = thread->stats.GetStart();
+      uint64_t last_ops = 0;
+      uint64_t last_time = start_time;
+      uint64_t now_done = 0;
+      uint64_t per_second_done;
+      uint64_t now_time;
+
+      // 统计每秒的操作数
+      // 统计每秒的吞吐量
+      // 将每秒的操作latency打log，
+      while (true)
+      {
+        if(thread->shared->num_done >= thread->shared->total - 1)break;
+        sleep(1);
+
+        now_time = FLAGS_env->NowMicros();
+        thread->shared->latencys_mutex.Lock();
+        now_done = thread->shared->ops_num;
+        thread->shared->latencys_mutex.Unlock();
+
+        per_second_done = now_done - last_ops;
+        uint64_t eBytes = per_second_done * (key_size_+FLAGS_value_size);
+        uint64_t now_bytes = now_done * (key_size_+FLAGS_value_size);
+        double use_time = (now_time - last_time)*1e-6;
+        double now = (now_time - start_time)*1e-6;
+
+        LZW_LOG(1,"now=,%.2f,s speed=,%.2f,MB/s,%.1f,iops size=,%.1f,MB average=,%.2f,MB/s,%.1f,iops,\n",
+                    now,(1.0*eBytes/1048576.0)/use_time/*throughput*/,1.0*per_second_done/use_time/*ops*/,1.0*now_bytes/1048576.0,
+                    (1.0*now_bytes/1048576.0)/now,1.0*now_done/now);
+        
+        uint64_t *ops_latency = thread->shared->latencys;
+        std::sort(ops_latency + last_ops, ops_latency + now_done);
+
+        if (per_second_done > 2) {
+          uint64_t cnt90 = 0.90 * per_second_done - 1 + last_ops;
+          uint64_t cnt99 = 0.99 * per_second_done - 1 + last_ops;
+          uint64_t cnt999 = 0.999 * per_second_done - 1 + last_ops;
+          uint64_t cnt9999 = 0.9999 * per_second_done - 1 + last_ops;
+          uint64_t cnt99999 = 0.99999 * per_second_done - 1 + last_ops;
+
+          //printf("per_second_done:%lu,last_ops:%lu,cnt90:%lu,cnt99:%lu,%lu,%lu,%lu\n",per_second_done,last_ops,cnt90,cnt99,cnt999,cnt9999,cnt99999);
+
+          LZW_LOG(5,"%.2f,%.1f,%lu,,,%lu,,,%lu,,,%lu,,,%lu,,,\n",
+                    now,1.0*per_second_done/use_time,
+                    ops_latency[cnt90],
+                    ops_latency[cnt99],
+                    ops_latency[cnt999],
+                    ops_latency[cnt9999],
+                    ops_latency[cnt99999]);
+        }
+
+        last_ops = now_done;
+        last_time = now_time;
+      }
+      return;
+    }
+
+    ReadOptions options(FLAGS_verify_checksum, true);
+    RandomGenerator gen;
+    
+    std::unique_ptr<const char[]> key_guard;
+    Slice key = AllocateKey(&key_guard);
+    std::string value;
+    Status s;
+    DB* db = SelectDB(thread);
+    uint64_t finish_time;
+    uint64_t found = 0;
+    uint64_t per_op_start_time = 0;
+    uint64_t reads_done = 0;
+    uint64_t writes_done = 0;
+
+    Duration duration(FLAGS_duration, FLAGS_ycsb_workloada_num);
+
+    if(FLAGS_benchmark_write_rate_limit > 0)
+    {
+      printf(">>>> FLAGS_benchmark_write_rate_limit YCSBA \n");
+      thread->shared->write_rate_limiter.reset(
+        NewGenericRateLimiter(FLAGS_benchmark_write_rate_limit)
+      );
+    }
+
+    while(!duration.Done(1))
+    {
+      long k;
+      if (FLAGS_YCSB_distribution == Uniform )
+      {
+        k = thread->rand.Next() % FLAGS_num;
+      } 
+      else if(FLAGS_YCSB_distribution == Zipfian )
+      {
+        thread->shared->distribute_mutex.Lock();
+        k = (long)thread->shared->zipf->Next();
+        thread->shared->distribute_mutex.Unlock();
+      }
+      else
+      {
+        thread->shared->distribute_mutex.Lock();
+        k = (long)thread->shared->latest->Next();
+        thread->shared->distribute_mutex.Unlock();
+      }
+      GenerateKeyFromInt(k, FLAGS_num, &key);
+
+      int next_op = thread->rand.Next() % 100;
+      if (FLAGS_report_ops_latency)
+      {
+        per_op_start_time = FLAGS_env->NowMicros();
+      }
+      if(next_op >= FLAGS_YCSB_write_ratio)
+      {
+        // read
+        s = db->Get(options, key, &value);
+        finish_time = FLAGS_env->NowMicros() - per_op_start_time;
+        if(!s.ok()&&!s.IsNotFound())
+        {
+          fprintf(stderr, "k=%ld; get error: %s\n", k, s.ToString().c_str());
+        }
+        else if(!s.IsNotFound())
+        {
+          found++;
+        }
+        thread->stats.FinishedOps(nullptr, db, 1, finish_time, kRead);
+        reads_done++;
+      }
+      else
+      {
+        // write
+        s = db->Put(write_options_, key, gen.Generate(FLAGS_value_size));
+        finish_time = FLAGS_env->NowMicros() - per_op_start_time;
+        if(!s.ok())
         {
           fprintf(stderr, "put error: %s\n", s.ToString().c_str());
         }
