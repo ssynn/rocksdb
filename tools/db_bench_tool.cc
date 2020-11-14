@@ -240,6 +240,8 @@ DEFINE_int32(YCSB_distribution, 0, "key distribution for YCSB: Uniform=0|Zipfian
 
 DEFINE_int32(YCSB_write_ratio, 0, "Control the ratio of reading and writing");
 
+DEFINE_int32(YCSB_scan_length, 1000, "");
+
 DEFINE_int64(num, 1000000, "Number of key/values to place in database");
 
 DEFINE_int64(numdistinct, 1000,
@@ -3240,7 +3242,14 @@ class Benchmark {
         fprintf(stdout, "write ratio: %d freshdb: %d\n", FLAGS_YCSB_write_ratio, fresh_db);
 
         method = &Benchmark::YCSBWorkloadABCD;
-      }else if (name == "ycsbwklda"){
+      } else if (name == "ycsbworkloade"){
+        fresh_db = true;
+        fprintf(stdout, ">>>> FLAGS_benchmark YCSB \n");
+        fprintf(stdout, "WORKLOAD: E \n");
+        method = &Benchmark::YCSBWorkloadE;
+      } else if (name == "ycsbworkloadf") {
+        // TODO
+      } else if (name == "ycsbwklda"){
         fresh_db = true;
         method = &Benchmark::YCSBWorkloadA;
       } else if(name=="fillrandomwithmoniter") {
@@ -3640,25 +3649,18 @@ class Benchmark {
                                              FLAGS_report_interval_seconds));
     }
 
-    if(FLAGS_report_ops_latency && (method == &Benchmark::YCSBWorkloadA)) 
+    if(FLAGS_report_ops_latency && 
+      ((method == &Benchmark::YCSBWorkloadA)||
+      (method == &Benchmark::YCSBWorkloadABCD)||
+      (method == &Benchmark::FillRandomWithMoniter)||
+      (method == &Benchmark::YCSBWorkloadE)||
+      (method == &Benchmark::YCSBWorkloadF)
+      )
+    ) 
     {
       // 每个线程都要写入ycsb_workloada_num的数据
       shared.latencys = new uint64_t[FLAGS_ycsb_workloada_num * n];
       n++; // 额外开一个线程用于统计操作latency和每秒吞吐量
-      shared.total = n;
-    }
-
-    if(FLAGS_report_ops_latency && (method == &Benchmark::YCSBWorkloadABCD))
-    {
-      shared.latencys = new uint64_t[FLAGS_ycsb_workloada_num * n];
-      n++; // 额外开一个线程用于统计操作latency和每秒吞吐量
-      shared.total = n;
-    }
-
-    if(FLAGS_report_ops_latency && (method == &Benchmark::FillRandomWithMoniter))
-    {
-      shared.latencys = new uint64_t[FLAGS_num];
-      n++;
       shared.total = n;
     }
 
@@ -3710,18 +3712,14 @@ class Benchmark {
     }
     merge_stats.Report(name);
 
-    if ( FLAGS_report_ops_latency && (method == &Benchmark::YCSBWorkloadA)) {
-      delete[] shared.latencys;
-      shared.latencys = nullptr;
-    }
-
-    if (FLAGS_report_ops_latency && (method == &Benchmark::YCSBWorkloadABCD))
-    {
-      delete[] shared.latencys;
-      shared.latencys = nullptr;
-    }
-
-    if( FLAGS_report_ops_latency && (method == &Benchmark::FillRandomWithMoniter))
+    if(FLAGS_report_ops_latency && 
+      ((method == &Benchmark::YCSBWorkloadA)||
+      (method == &Benchmark::YCSBWorkloadABCD)||
+      (method == &Benchmark::FillRandomWithMoniter)||
+      (method == &Benchmark::YCSBWorkloadE)||
+      (method == &Benchmark::YCSBWorkloadF)
+      )
+    )
     {
       delete[] shared.latencys;
       shared.latencys = nullptr;
@@ -5266,6 +5264,7 @@ class Benchmark {
     thread->stats.AddMessage(msg);
   }
 
+  // 存在SCAN操作，只支持Uniform、Zipfian分布
   void YCSBWorkloadE(ThreadState* thread)
   {
     // 最后一个线程负责记录每个操作的延迟和每秒的吞吐量
@@ -5342,6 +5341,7 @@ class Benchmark {
     uint64_t per_op_start_time = 0;
     uint64_t reads_done = 0;
     uint64_t writes_done = 0;
+    ZipfianGenerator scan_length_generator(FLAGS_YCSB_scan_length);
 
     Duration duration(FLAGS_duration, FLAGS_ycsb_workloada_num);
 
@@ -5356,24 +5356,22 @@ class Benchmark {
 
     while(!duration.Done(1))
     {
-      long k;
+      long key_num=0;
+      long scan_length=0;
       if (FLAGS_YCSB_distribution == Uniform )
       {
-        k = thread->rand.Next() % FLAGS_num;
+        key_num = thread->rand.Next() % FLAGS_num;
+        scan_length = thread->rand.Next() % FLAGS_YCSB_scan_length;
       } 
-      else if(FLAGS_YCSB_distribution == Zipfian )
-      {
-        thread->shared->distribute_mutex.Lock();
-        k = (long)thread->shared->zipf->Next();
-        thread->shared->distribute_mutex.Unlock();
-      }
       else
       {
         thread->shared->distribute_mutex.Lock();
-        k = (long)thread->shared->latest->Next();
+        key_num = (long)thread->shared->zipf->Next();
         thread->shared->distribute_mutex.Unlock();
+        scan_length = scan_length_generator.Next();
       }
-      GenerateKeyFromInt(k, FLAGS_num, &key);
+
+      GenerateKeyFromInt(key_num, FLAGS_num, &key);
 
       int next_op = thread->rand.Next() % 100;
       if (FLAGS_report_ops_latency)
@@ -5382,12 +5380,19 @@ class Benchmark {
       }
       if(next_op >= 5)
       {
-        // scan, max_scan
-        s = db->Get(options, key, &value);
+        // scan, max_scan TODO
+        Iterator* iter = db->NewIterator(options);
+        int i = 0;
+        for(iter->Seek(key);iter->Valid()&&i++<scan_length;iter->Next())
+        {
+          iter->value();
+        }
         finish_time = FLAGS_env->NowMicros() - per_op_start_time;
+        // printf("scan_length: %ld, finish: %d\n", scan_length, i);
+        delete iter;
         if(!s.ok()&&!s.IsNotFound())
         {
-          fprintf(stderr, "k=%ld; get error: %s\n", k, s.ToString().c_str());
+          fprintf(stderr, "k=%ld; get error: %s\n", key_num, s.ToString().c_str());
         }
         else if(!s.IsNotFound())
         {
@@ -5425,6 +5430,70 @@ class Benchmark {
              " total:%" PRIu64 " found:%" PRIu64 ")",
              reads_done, writes_done, FLAGS_ycsb_workloada_num, found);
     thread->stats.AddMessage(msg);
+  }
+
+  void YCSBWorkloadF(ThreadState* thread)
+  {
+    if (thread->tid == thread->shared->total - 1)
+    {
+      uint64_t start_time = thread->stats.GetStart();
+      uint64_t last_ops = 0;
+      uint64_t last_time = start_time;
+      uint64_t now_done = 0;
+      uint64_t per_second_done;
+      uint64_t now_time;
+
+      // 统计每秒的操作数
+      // 统计每秒的吞吐量
+      // 将每秒的操作latency打log，
+      while (true)
+      {
+        if(thread->shared->num_done >= thread->shared->total - 1)break;
+        sleep(1);
+
+        now_time = FLAGS_env->NowMicros();
+        thread->shared->latencys_mutex.Lock();
+        now_done = thread->shared->ops_num;
+        thread->shared->latencys_mutex.Unlock();
+
+        per_second_done = now_done - last_ops;
+        uint64_t eBytes = per_second_done * (key_size_+FLAGS_value_size);
+        uint64_t now_bytes = now_done * (key_size_+FLAGS_value_size);
+        double use_time = (now_time - last_time)*1e-6;
+        double now = (now_time - start_time)*1e-6;
+
+        LZW_LOG(1,"now=,%.2f,s speed=,%.2f,MB/s,%.1f,iops size=,%.1f,MB average=,%.2f,MB/s,%.1f,iops,\n",
+                    now,(1.0*eBytes/1048576.0)/use_time/*throughput*/,1.0*per_second_done/use_time/*ops*/,1.0*now_bytes/1048576.0,
+                    (1.0*now_bytes/1048576.0)/now,1.0*now_done/now);
+        
+        uint64_t *ops_latency = thread->shared->latencys;
+        std::sort(ops_latency + last_ops, ops_latency + now_done);
+
+        if (per_second_done > 2) {
+          uint64_t cnt90 = 0.90 * per_second_done - 1 + last_ops;
+          uint64_t cnt99 = 0.99 * per_second_done - 1 + last_ops;
+          uint64_t cnt999 = 0.999 * per_second_done - 1 + last_ops;
+          uint64_t cnt9999 = 0.9999 * per_second_done - 1 + last_ops;
+          uint64_t cnt99999 = 0.99999 * per_second_done - 1 + last_ops;
+
+          //printf("per_second_done:%lu,last_ops:%lu,cnt90:%lu,cnt99:%lu,%lu,%lu,%lu\n",per_second_done,last_ops,cnt90,cnt99,cnt999,cnt9999,cnt99999);
+
+          LZW_LOG(5,"%.2f,%.1f,%lu,,,%lu,,,%lu,,,%lu,,,%lu,,,\n",
+                    now,1.0*per_second_done/use_time,
+                    ops_latency[cnt90],
+                    ops_latency[cnt99],
+                    ops_latency[cnt999],
+                    ops_latency[cnt9999],
+                    ops_latency[cnt99999]);
+        }
+
+        last_ops = now_done;
+        last_time = now_time;
+      }
+      return;
+    }
+
+    
   }
 
   Status DoDeterministicCompact(ThreadState* thread,

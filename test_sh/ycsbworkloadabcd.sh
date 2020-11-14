@@ -2,7 +2,6 @@
 
 
 bench_db_path="/tmp/rocksdb_ycsbworkloadabcd"
-value_size="1024"
 compression_type="none"
 # histogram="true"
 histogram_accurate="true"
@@ -11,9 +10,10 @@ benchmarks="ycsbwkldabcd,stats"
 report_ops_latency="true"
 report_fillrandom_latency="true"
 
-workload="A"
-ycsb_workloada_num="500"
+workload="E"
+ycsb_workloada_num="5000"
 threads="2"
+value_size="1024"
 
 const_params=""
 
@@ -41,6 +41,12 @@ function FILL_PARAMS(){
     if [ $workload == "D" ];then
         YCSB_write_ratio="5" # A:50, B:5 C:0 D:5
         YCSB_distribution="2" # uniform=0 zipfian=1 latest=2
+    fi
+
+    if [ $workload == "E" ];then
+        benchmarks="ycsbworkloade,stats"
+        YCSB_distribution="2"
+        bench_db_path="/tmp/rocksdb_ycsbworkloade"
     fi
 
     if [ -n "$bench_db_path" ];then

@@ -30,27 +30,31 @@ limit="`expr 256 \* 1024 \* 1024`"
 # echo $num
 
 
-workload="B"
+# workload="B"
 
-if [ $workload == "A" ];then
-    YCSB_write_ratio="50" # A:50, B:5 C:0 D:5
-    YCSB_distribution="1" # uniform=0 zipfian=1 latest=2
-fi
+# if [ $workload == "A" ];then
+#     YCSB_write_ratio="50" # A:50, B:5 C:0 D:5
+#     YCSB_distribution="1" # uniform=0 zipfian=1 latest=2
+# fi
 
-if [ $workload == "B" ];then
-    YCSB_write_ratio="5" # A:50, B:5 C:0 D:5
-    YCSB_distribution="1" # uniform=0 zipfian=1 latest=2
-fi
+# if [ $workload == "B" ];then
+#     YCSB_write_ratio="5" # A:50, B:5 C:0 D:5
+#     YCSB_distribution="1" # uniform=0 zipfian=1 latest=2
+# fi
 
-if [ $workload == "C" ];then
-    YCSB_write_ratio="0" # A:50, B:5 C:0 D:5
-    YCSB_distribution="1" # uniform=0 zipfian=1 latest=2
-fi
+# if [ $workload == "C" ];then
+#     YCSB_write_ratio="0" # A:50, B:5 C:0 D:5
+#     YCSB_distribution="1" # uniform=0 zipfian=1 latest=2
+# fi
 
-if [ $workload == "D" ];then
-    YCSB_write_ratio="5" # A:50, B:5 C:0 D:5
-    YCSB_distribution="2" # uniform=0 zipfian=1 latest=2
-fi
+# if [ $workload == "D" ];then
+#     YCSB_write_ratio="5" # A:50, B:5 C:0 D:5
+#     YCSB_distribution="2" # uniform=0 zipfian=1 latest=2
+# fi
 
-echo $YCSB_write_ratio
-echo $YCSB_distribution
+# echo $YCSB_write_ratio
+# echo $YCSB_distribution
+
+aas=${ass:-"123"}
+
+echo $aas
