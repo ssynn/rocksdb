@@ -10,18 +10,18 @@ benchmarks="ycsbwkldabcd,stats"
 report_ops_latency="true"
 report_fillrandom_latency="true"
 
-workload="E"
+workload="F"
 ycsb_workloada_num="5000"
 threads="2"
 value_size="1024"
 
 const_params=""
 
-function FILL_PARAMS(){
-    if [ -n "$num" ];then
-        let num=${threads}*${ycsb_workloada_num}
-    fi
+if [ ! "$num" ];then
+    let num=${threads}*${ycsb_workloada_num}
+fi
 
+function FILL_PARAMS(){
     if [ $workload == "A" ];then
         YCSB_write_ratio="50" # A:50, B:5 C:0 D:5
         YCSB_distribution="1" # uniform=0 zipfian=1 latest=2
@@ -47,6 +47,12 @@ function FILL_PARAMS(){
         benchmarks="ycsbworkloade,stats"
         YCSB_distribution="2"
         bench_db_path="/tmp/rocksdb_ycsbworkloade"
+    fi
+
+    if [ $workload == "F" ];then
+        benchmarks="ycsbworkloadf,stats"
+        YCSB_distribution="2"
+        bench_db_path="/tmp/rocksdb_ycsbworkloadf"
     fi
 
     if [ -n "$bench_db_path" ];then
@@ -140,9 +146,8 @@ if [ ! -f "$bench_file_path" ];then
     bench_file_path="$PWD/db_bench"
 fi
 
-
 cmd="$bench_file_path $const_params"
-cmd=$cmd">YCSB_ABCD.out"
+cmd=$cmd">YCSB_${workload}_${value_size}_${num}.out"
 
 echo $cmd
 eval $cmd

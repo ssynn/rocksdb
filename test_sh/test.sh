@@ -55,6 +55,15 @@ limit="`expr 256 \* 1024 \* 1024`"
 # echo $YCSB_write_ratio
 # echo $YCSB_distribution
 
-aas=${ass:-"123"}
 
-echo $aas
+ycsb_workloada_num="5000"
+threads="2"
+if [ ! "$num" ];then
+    let num=${threads}*${ycsb_workloada_num}
+    echo $num
+fi
+
+# let num=${threads}*${ycsb_workloada_num}
+
+
+echo $num
