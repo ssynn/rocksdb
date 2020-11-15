@@ -12,7 +12,7 @@ report_fillrandom_latency="true"
 
 workload="A"
 ycsb_workloada_num="5000"
-threads="2"
+threads="1"
 value_size="1024"
 
 const_params=""
@@ -119,7 +119,7 @@ function FILL_PARAMS(){
 # 把输出的一堆乱七八糟的文件拷贝到result文件夹
 COPY_OUT_FILE(){
     mkdir $bench_file_dir/result > /dev/null 2>&1
-    res_dir=$bench_file_dir/result/YCSB_${workload}_${value_size}_${num}
+    res_dir=$bench_file_dir/result/YCSB_${workload}_${value_size}_${num}_${threads}
     mkdir $res_dir > /dev/null 2>&1
     \mv -f $bench_file_dir/compaction.csv $res_dir/
     \mv -f $bench_file_dir/OP_DATA $res_dir/
