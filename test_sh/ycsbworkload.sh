@@ -11,7 +11,7 @@ report_ops_latency="true"
 report_fillrandom_latency="true"
 
 workload="F"
-ycsb_workloada_num="5000"
+ycsb_workloada_num="500000"
 threads="2"
 value_size="1024"
 
