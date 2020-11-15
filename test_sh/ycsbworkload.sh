@@ -10,7 +10,7 @@ benchmarks="ycsbwkldabcd,stats"
 report_ops_latency="true"
 report_fillrandom_latency="true"
 
-workload="F"
+workload="A"
 ycsb_workloada_num="5000"
 threads="2"
 value_size="1024"
@@ -124,10 +124,10 @@ COPY_OUT_FILE(){
     \mv -f $bench_file_dir/compaction.csv $res_dir/
     \mv -f $bench_file_dir/OP_DATA $res_dir/
     \mv -f $bench_file_dir/OP_TIME.csv $res_dir/
-    \mv -f $bench_file_dir/out.out $res_dir/
+    # \mv -f $bench_file_dir/out.out $res_dir/
     \mv -f $bench_file_dir/Latency.csv $res_dir/
     \mv -f $bench_file_dir/PerSecondLatency.csv $res_dir/
-    \mv -f $db/OPTIONS-* $res_dir/
+    # \mv -f $db/OPTIONS-* $res_dir/
     \mv -f $bench_file_dir/*out $res_dir/
     #\cp -f $db/LOG $res_dir/
 }
