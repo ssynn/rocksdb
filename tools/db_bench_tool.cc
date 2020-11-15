@@ -77,6 +77,7 @@
 
 #include "utilities/my_log.h"
 #include "utilities/distribution_generator.h"
+#include "utilities/zipf.h"
 
 #include <algorithm>
 #include <queue>
@@ -5009,11 +5010,8 @@ class Benchmark {
   // 工作线程由于自身产生数据和记录LOG会有开销，大量操作在10us，
   // 所以只在数据库操作前和操作完成后记录时间，以忽略无用对时间
   // 所以单线程的情况下，数据库基本上不会跑满，至少开两个工作线程
-  void YCSBWorkloadA(ThreadState* thread)
-  {
-    // 最后一个线程负责记录每个操作的延迟和每秒的吞吐量
-    if (thread->tid == thread->shared->total - 1)
-    {
+  void YCSBWorkloadA(ThreadState* thread) {
+    if( thread->tid == thread->shared->total - 1 ) {  //record latency and throughput per second
       ToMoniterThread(thread);
       return;
     }
@@ -5021,8 +5019,8 @@ class Benchmark {
     ReadOptions options(FLAGS_verify_checksum, true);
     RandomGenerator gen;
     
-    // init_zipf_generator(0, FLAGS_num);
-
+    init_zipf_generator(0, FLAGS_num);
+    
     std::string value;
     int64_t found = 0;
     uint64_t per_op_start_time = 0;
@@ -5034,87 +5032,79 @@ class Benchmark {
     std::unique_ptr<const char[]> key_guard;
     Slice key = AllocateKey(&key_guard);
 
-    if(FLAGS_benchmark_write_rate_limit > 0)
-    {
-      printf(">>>> FLAGS_benchmark_write_rate_limit YCSBA \n");
+    if (FLAGS_benchmark_write_rate_limit > 0) {
+       printf(">>>> FLAGS_benchmark_write_rate_limit YCSBA \n");
       thread->shared->write_rate_limiter.reset(
-        NewGenericRateLimiter(FLAGS_benchmark_write_rate_limit)
-      );
+          NewGenericRateLimiter(FLAGS_benchmark_write_rate_limit));
     }
-    Status s;
-    DB* db = SelectDB(thread);
-    uint64_t finish_time;
-    while(!duration.Done(1))
-    {
+    
+    // the number of iterations is the larger of read_ or write_
+    while (!duration.Done(1)) {
+      DB* db = SelectDB(thread);
+       
       long k;
-      if (FLAGS_YCSB_distribution == Uniform )
-      {
+      if (FLAGS_YCSB_distribution == Uniform){
+        //Generate number from uniform distribution            
         k = thread->rand.Next() % FLAGS_num;
-      } 
-      else if(FLAGS_YCSB_distribution == Zipfian )
-      {
-        // 使用zipfian分布
-        thread->shared->distribute_mutex.Lock();
-        k = (long)thread->shared->zipf->Next();
-        // LZW_LOG(4, "%ld\n", k);
-        thread->shared->distribute_mutex.Unlock();
-      }
-      else
-      {
-        thread->shared->distribute_mutex.Lock();
-        k = (long)thread->shared->latest->Next();
-        // LZW_LOG(4, "%ld\n", k);
-        thread->shared->distribute_mutex.Unlock();
+      } else { //default
+        //Generate number from zipf distribution
+        k = nextValue() % FLAGS_num;            
       }
       GenerateKeyFromInt(k, FLAGS_num, &key);
-      value = gen.Generate(FLAGS_value_size).ToString();
 
-      // YCSB A负载，一半概率读，一半概率写
-      int next_op = thread->rand.Next() % 100;
-      if (FLAGS_report_ops_latency)
-      {
+      if (FLAGS_report_ops_latency) {   //
         per_op_start_time = FLAGS_env->NowMicros();
       }
-      if(next_op < 50)
-      {
-        // read
-        s = db->Get(options, key, &value);
-        finish_time = FLAGS_env->NowMicros() - per_op_start_time;
-        if(!s.ok()&&!s.IsNotFound())
-        {
+
+      int next_op = thread->rand.Next() % 100;
+      if (next_op < 50){
+        //read
+        Status s = db->Get(options, key, &value);
+        if (!s.ok() && !s.IsNotFound()) {
           fprintf(stderr, "k=%ld; get error: %s\n", k, s.ToString().c_str());
-        }
-        else if(!s.IsNotFound())
-        {
+          //exit(1);
+          // we continue after error rather than exiting so that we can
+          // find more errors if any
+        } else if (!s.IsNotFound()) {
           found++;
+          //thread->stats.FinishedOps(nullptr, db, 1, kRead);
         }
-        thread->stats.FinishedOps(nullptr, db, 1, finish_time, kRead);
+        thread->stats.FinishedOps(nullptr, db, 1, kRead);  //not found is normal operation
         reads_done++;
-      }
-      else
-      {
-        // write
-        s = db->Put(write_options_, key, value);
-        finish_time = FLAGS_env->NowMicros() - per_op_start_time;
-        if(!s.ok())
-        {
+        
+      } else{
+        //write
+        if (FLAGS_benchmark_write_rate_limit > 0) {
+            
+            thread->shared->write_rate_limiter->Request(
+                FLAGS_value_size + key_size_, Env::IO_HIGH,
+                nullptr /* stats */, RateLimiter::OpType::kWrite);
+            thread->stats.ResetLastOpTime();
+        }
+
+        if (FLAGS_report_ops_latency) {   //
+          per_op_start_time = FLAGS_env->NowMicros();
+        }
+
+        Status s = db->Put(write_options_, key, gen.Generate(FLAGS_value_size));
+        if (!s.ok()) {
           fprintf(stderr, "put error: %s\n", s.ToString().c_str());
-        }
-        else
-        {
+          //exit(1);
+        } else{
           writes_done++;
-          thread->stats.FinishedOps(nullptr, db, 1, finish_time, kWrite);
-        }
+          thread->stats.FinishedOps(nullptr, db, 1, kWrite);
+        }                
       }
 
-      if (FLAGS_report_ops_latency)
-      {
+      if (FLAGS_report_ops_latency) {   //
+
         thread->shared->latencys_mutex.Lock();
-        thread->shared->latencys[thread->shared->ops_num] = finish_time;
+        thread->shared->latencys[thread->shared->ops_num] = FLAGS_env->NowMicros() - per_op_start_time;
         thread->shared->ops_num++;
         thread->shared->latencys_mutex.Unlock();
       }
-    }
+
+    } 
     char msg[100];
     snprintf(msg, sizeof(msg), "( reads:%" PRIu64 " writes:%" PRIu64 \
              " total:%" PRIu64 " found:%" PRIu64 ")",
